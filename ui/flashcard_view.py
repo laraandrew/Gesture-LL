@@ -2,7 +2,10 @@ from typing import List, Dict, Any, Optional
 
 
 class FlashcardView:
-    """Represents the flashcard state that can be rendered in any UI layer."""
+    """
+    Represents flashcard UI state.
+    Now also carries optional STT/evaluation metadata.
+    """
 
     def to_dict(
         self,
@@ -11,8 +14,11 @@ class FlashcardView:
         learned: List[str],
         study_more: List[str],
         revisit: List[str],
+        recognized_text: Optional[str] = None,
+        evaluation: Optional[bool] = None,
     ) -> Dict[str, Any]:
-        return {
+
+        data = {
             "current_card": {
                 "english": current_english,
                 "spanish": current_spanish,
@@ -21,3 +27,11 @@ class FlashcardView:
             "study_more_words": study_more,
             "revisit_words": revisit,
         }
+
+        if recognized_text is not None:
+            data["recognized_text"] = recognized_text
+
+        if evaluation is not None:
+            data["evaluation"] = evaluation
+
+        return data
