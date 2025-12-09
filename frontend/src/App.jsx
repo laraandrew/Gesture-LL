@@ -9,6 +9,11 @@ export default function App() {
   const [state, setState] = useState(null)
   const [lastEvent, setLastEvent] = useState(null)
 
+  // NEW UI state
+  const [isRecording, setIsRecording] = useState(false)
+  const [recognizedText, setRecognizedText] = useState("")
+  const [evaluation, setEvaluation] = useState(null)
+
   useEffect(() => {
     async function fetchInitialState() {
       try {
@@ -27,19 +32,46 @@ export default function App() {
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data)
-        if (message.type === 'state') {
-          setState(message.payload)
-        } else if (message.type === 'event') {
-          setLastEvent(message.payload)
+
+        switch (message.type) {
+          case "state":
+            setState(message.payload)
+            break
+
+          case "event":
+            // Gesture animations + evaluation
+            setLastEvent(message.payload)
+
+            if (message.payload.kind === "evaluation") {
+              setEvaluation({
+                correct: message.payload.correct,
+                spoken: message.payload.spoken
+              })
+            }
+            break
+
+          case "START_RECORDING":
+            console.log("🎤 START_RECORDING")
+            setIsRecording(true)
+            setRecognizedText("") // clear
+            break
+
+          case "STOP_RECORDING":
+            console.log("🛑 STOP_RECORDING", message.text)
+            setIsRecording(false)
+            setRecognizedText(message.text)
+            break
+
+          default:
+            console.log("Unknown WS message:", message)
         }
+
       } catch (err) {
         console.error('Error parsing WebSocket message', err)
       }
     }
 
-    ws.onerror = (err) => {
-      console.error('WebSocket error', err)
-    }
+    ws.onerror = (err) => console.error('WebSocket error', err)
 
     return () => {
       ws.close()
@@ -50,14 +82,42 @@ export default function App() {
     <div className="min-h-screen flex items-center justify-center px-4 py-10">
       <ChristmasFrame>
         <div className="flex flex-col gap-6 items-center">
+
           <h1 className="text-3xl md:text-4xl font-bold text-center">
             🎄 Gesture Language Learning 🎄
           </h1>
+
           <p className="text-sm text-gray-200 text-center max-w-md">
             Raise your hand to answer, swipe up to study more, swipe left to revisit later.
-            Watch the camera window for gesture recognition.
+            Recording begins automatically when your hand is raised.
           </p>
+
+          {/* Recording Indicator */}
+          {isRecording && (
+            <div className="text-red-400 font-bold text-xl animate-pulse">
+              🔴 Listening...
+            </div>
+          )}
+
+          {/* Display recognized speech */}
+          {recognizedText && (
+            <div className="text-green-300 text-lg">
+              <strong>You said:</strong> {recognizedText}
+            </div>
+          )}
+
+          {/* Evaluation result */}
+          {evaluation && (
+            <div className={`text-lg font-semibold ${
+              evaluation.correct ? "text-green-400" : "text-red-400"
+            }`}>
+              {evaluation.correct ? "✔ Correct!" : "✖ Incorrect"}
+              <div className="text-sm opacity-80">({evaluation.spoken})</div>
+            </div>
+          )}
+
           <Flashcard state={state} lastEvent={lastEvent} />
+
           <GestureIcons />
         </div>
       </ChristmasFrame>
