@@ -1,6 +1,100 @@
 .venv/
+venv/
+env/
+ENV/
 __pycache__/
+*.py[cod]
 *.pyc
+*.pyo
+*.pyd
+.Python
+pip-wheel-metadata/
+pip-delete-this-directory.txt
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Python caches, test, coverage
+.pytest_cache/
+.mypy_cache/
+.cache/
+.pyre/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtualenvs and environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg
+*.egg-info/
+.eggs/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.iml
+
+# Node / frontend
+node_modules/
 frontend/node_modules/
+frontend/dist/
+dist/
+.parcel-cache/
+.vite/
+/.vite/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment / secrets
 .env
+.env.local
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.jks
+id_rsa
+id_rsa.pub
+*.asc
+*.secret
+
+# Jupyter
+.ipynb_checkpoints
+
+# Temporary files
+*.swp
+*.swo
+tmp/
+temp/
+
+# Terraform
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+.terraform.lock.hcl
+
+# Misc
+__pycache__/
+*.so
+/.cache/
+.ropeproject/
+/.python-version
