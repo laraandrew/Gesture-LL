@@ -1,5 +1,4 @@
 import os
-import time
 import tempfile
 import sounddevice as sd
 import soundfile as sf
@@ -7,14 +6,9 @@ from openai import OpenAI
 
 
 class SpeechToText:
-    """
-    Real microphone-based STT using Whisper via OpenAI API.
-    Synchronous version — REQUIRED because main.py calls transcribe() normally.
-    """
-
     def __init__(
         self,
-        mode: str = "whisper",
+        mode: str = "dummy",
         sample_rate: int = 16000,
         channels: int = 1,
         duration: float = 3.0,
@@ -27,40 +21,65 @@ class SpeechToText:
         self.duration = duration
         self.on_start = on_start
         self.on_stop = on_stop
-        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        if mode == "whisper":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                print("[STT] WARNING: OPENAI_API_KEY not set. Using dummy mode.")
+                self.mode = "dummy"
+                self.client = None
+            else:
+                self.client = OpenAI(api_key=api_key)
+        else:
+            self.client = None
 
     def transcribe(self) -> str:
-        """Record microphone and send to Whisper. BLOCKING call (correct)."""
+        if self.mode == "dummy":
+            print("\n[STT] Dummy mode: type the Spanish word:")
+            return input("> ").strip()
 
         if self.on_start:
             self.on_start()
 
-        print("[STT] Recording...")
+        print("[STT] Recording…")
 
-        audio = sd.rec(
-            int(self.duration * self.sample_rate),
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            dtype="float32",
-        )
-        sd.wait()
+        try:
+            audio = sd.rec(
+                int(self.duration * self.sample_rate),
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="float32",
+            )
+            sd.wait()
+        except Exception as e:
+            print(f"[STT] Mic error: {e}")
+            if self.on_stop:
+                self.on_stop()
+            return ""
 
         if self.on_stop:
             self.on_stop()
 
-        print("[STT] Processing...")
+        # Save temp WAV
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                sf.write(tmp.name, audio, self.sample_rate)
+                audio_path = tmp.name
 
-        # Save temporary WAV file
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            sf.write(tmp.name, audio, self.sample_rate)
-            audio_path = tmp.name
+            with open(audio_path, "rb") as audio_file:
+                response = self.client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                )
 
-        # Send audio to Whisper
-        response = self.client.audio.transcriptions.create(
-            model="gpt-4o-mini-tts",   # ✔️ correct for Whisper-like STT
-            file=open(audio_path, "rb"),
-        )
+            return response.text.strip()
 
-        text = response.text.strip()
-        print(f"[STT] Transcript: {text}")
-        return text
+        except Exception as e:
+            print(f"[STT] Whisper error: {e}")
+            return ""
+
+        finally:
+            try:
+                os.unlink(audio_path)
+            except:
+                pass

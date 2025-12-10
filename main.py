@@ -3,14 +3,14 @@ os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
 from dotenv import load_dotenv
 import asyncio
 import threading
-import time
 import platform
+import re
+import unicodedata
 from typing import Dict, Any, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import cv2
 
 from word_bank import WORD_BANK
 from cv.gesture_detector import GestureDetector, GestureEvent
@@ -18,10 +18,39 @@ from stt.speech_to_text import SpeechToText
 from ui.flashcard_view import FlashcardView
 from ui.animations import Animations
 
+# 🔥 Shared listening state
+import core.listening_state as listening_state
 
 load_dotenv()
+
+
+# -----------------------------------------------------
+# Normalization Helpers (NEW)
+# -----------------------------------------------------
+def normalize_answer(text: str) -> str:
+    """Normalize Whisper text for robust comparison."""
+    if not text:
+        return ""
+
+    # Lowercase & strip
+    text = text.lower().strip()
+
+    # Remove leading/trailing punctuation
+    text = re.sub(r'^[\.\,\!\?\;\:]+|[\.\,\!\?\;\:]+$', '', text)
+
+    # Remove Whisper japanese punctuation
+    text = text.replace("。", "").replace("、", "")
+
+    # Normalize accents → ASCII
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("utf-8")
+
+    return text.strip()
+
+
+# -----------------------------------------------------
+# Deck Manager
+# -----------------------------------------------------
 class DeckManager:
-    """Manages flashcard deck and word categories."""
     def __init__(self, word_bank: Dict[str, str]):
         self.all_words = list(word_bank.items())
         self.index = 0
@@ -31,40 +60,59 @@ class DeckManager:
         self.study_more_words = []
         self.revisit_words = []
 
-        self.current_word = self.all_words[self.index][0] if self.all_words else None
+        self.current_word = (
+            self.all_words[self.index][0] if self.all_words else None
+        )
         self.view = FlashcardView()
 
     def _advance(self):
         if not self.all_words:
             self.current_word = None
             return
+
         self.index = (self.index + 1) % len(self.all_words)
         self.current_word = self.all_words[self.index][0]
         print(f"[deck] Advanced to index={self.index}, word={self.current_word!r}")
 
     def mark_study_more(self):
         print(f"[deck] mark_study_more on {self.current_word!r}")
-        if self.current_word and self.current_word not in self.study_more_words:
+        if self.current_word not in self.study_more_words:
             self.study_more_words.append(self.current_word)
         self._advance()
 
     def mark_revisit(self):
         print(f"[deck] mark_revisit on {self.current_word!r}")
-        if self.current_word and self.current_word not in self.revisit_words:
+        if self.current_word not in self.revisit_words:
             self.revisit_words.append(self.current_word)
         self._advance()
 
     def mark_learned(self):
         print(f"[deck] mark_learned on {self.current_word!r}")
-        if self.current_word and self.current_word not in self.learned_words:
+        if self.current_word not in self.learned_words:
             self.learned_words.append(self.current_word)
         self._advance()
 
+    # -----------------------------------------------------
+    # UPDATED evaluate_spoken
+    # -----------------------------------------------------
     def evaluate_spoken(self, spoken: str) -> bool:
-        expected = self.word_bank.get(self.current_word, "").lower()
-        result = spoken.lower().strip() == expected.strip()
-        print(f"[eval] spoken={spoken!r}, expected={expected!r}, correct={result}")
-        return result
+        expected_raw = self.word_bank.get(self.current_word, "")
+
+        cleaned_expected = normalize_answer(expected_raw)
+        cleaned_spoken = normalize_answer(spoken)
+
+        # Exact OR fuzzy match
+        correct = (
+            cleaned_spoken == cleaned_expected
+            or cleaned_expected in cleaned_spoken  # fuzzy containment match
+        )
+
+        print(
+            f"[eval] spoken_raw={spoken!r}, cleaned={cleaned_spoken!r}, "
+            f"expected={cleaned_expected!r}, correct={correct}"
+        )
+
+        return correct
 
     def get_state(self) -> Dict[str, Any]:
         return self.view.to_dict(
@@ -76,6 +124,9 @@ class DeckManager:
         )
 
 
+# -----------------------------------------------------
+# WebSocket Manager
+# -----------------------------------------------------
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -94,21 +145,23 @@ class ConnectionManager:
         try:
             await websocket.send_json(msg)
         except Exception as e:
-            print(f"[ws] send failed, dropping connection: {e}")
+            print(f"[ws] send failed: {e}")
             self.disconnect(websocket)
 
     async def broadcast(self, msg: dict):
-        """Broadcast a JSON message to all active clients."""
         for ws in list(self.active_connections):
             await self.send(ws, msg)
 
     async def broadcast_state(self):
-        state = deck_manager.get_state()
+        data = deck_manager.get_state()
         for ws in list(self.active_connections):
-            await self.send(ws, {"type": "state", "payload": state})
+            await self.send(ws, {"type": "state", "payload": data})
 
 
-app = FastAPI(title="Gesture Language Learning App")
+# -----------------------------------------------------
+# FastAPI Setup
+# -----------------------------------------------------
+app = FastAPI(title="Gesture Language App")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -118,143 +171,110 @@ app.add_middleware(
 )
 
 deck_manager = DeckManager(WORD_BANK)
-stt_engine = SpeechToText()
+stt_engine = SpeechToText(mode="whisper", duration=3.0)
 animations = Animations()
 ws_manager = ConnectionManager()
 
-ASYNC_LOOP: Optional[asyncio.AbstractEventLoop] = None
-gesture_detector: Optional[GestureDetector] = None
+ASYNC_LOOP = None
+gesture_detector = None
 gesture_thread_started = False
 gesture_thread_lock = threading.Lock()
 
 
-def request_camera_permission():
-    print("[startup] Requesting camera access on main thread...")
-    cap = cv2.VideoCapture(0)
-    if cap.isOpened():
-        print("[startup] Camera successfully opened.")
-        cap.release()
-    else:
-        print("[startup] WARNING: Could not open camera during permission check.")
-    print("[startup] Camera permission check complete.")
-
-
+# -----------------------------------------------------
+# Gesture Handler
+# -----------------------------------------------------
 async def handle_gesture_event(event: GestureEvent):
-    """Async handler for gestures → deck mutations → WS broadcast."""
-    print(f"[gesture-handler] Received event: {event.type} @ {event.timestamp}")
+    print(f"[gesture-handler] Received event: {event.type}")
+
+    if listening_state.is_listening:
+        print("[gesture-handler] Ignoring gestures while listening.")
+        return
 
     if event.type == "SWIPE_LEFT":
         deck_manager.mark_revisit()
-        await ws_manager.broadcast(
-            {"type": "event", "payload": {"kind": "gesture", "name": "SWIPE_LEFT"}}
-        )
+        await ws_manager.broadcast({"type": "event", "payload": {"kind": "gesture", "name": "SWIPE_LEFT"}})
 
     elif event.type == "SWIPE_UP":
         deck_manager.mark_study_more()
-        await ws_manager.broadcast(
-            {"type": "event", "payload": {"kind": "gesture", "name": "SWIPE_UP"}}
-        )
+        await ws_manager.broadcast({"type": "event", "payload": {"kind": "gesture", "name": "SWIPE_UP"}})
 
     elif event.type == "HAND_UP":
-        print("[gesture-handler] HAND_UP → starting STT flow")
-        # 1️⃣ Notify frontend to show "recording"
+        print("[gesture-handler] HAND_UP → Starting STT")
+
+        listening_state.is_listening = True
+
         await ws_manager.broadcast({"type": "START_RECORDING"})
 
-        # 2️⃣ STT (mock or real)
         spoken = stt_engine.transcribe()
-        print(f"[gesture-handler] STT result: {spoken!r}")
+        print(f"[gesture-handler] Spoken: {spoken}")
 
-        # 3️⃣ Notify frontend to stop recording display
         await ws_manager.broadcast({"type": "STOP_RECORDING", "text": spoken})
 
-        # 4️⃣ Evaluate correctness
+        # Evaluate
         correct = deck_manager.evaluate_spoken(spoken)
+
         if correct:
+            deck_manager.mark_learned()
             animations.show_correct_animation()
         else:
+            deck_manager.mark_revisit()
             animations.show_incorrect_animation()
 
-        await ws_manager.broadcast(
-            {
-                "type": "event",
-                "payload": {"kind": "evaluation", "correct": correct, "spoken": spoken},
-            }
-        )
+        await ws_manager.broadcast({
+            "type": "event",
+            "payload": {"kind": "evaluation", "correct": correct, "spoken": spoken},
+        })
 
-    # Always send updated deck state
+        listening_state.is_listening = False
+
     await ws_manager.broadcast_state()
 
 
+# -----------------------------------------------------
+# Gesture Detector Thread
+# -----------------------------------------------------
 def start_gesture_detector():
-    """Start a single global GestureDetector thread (idempotent)."""
     global gesture_detector, gesture_thread_started
 
     with gesture_thread_lock:
         if gesture_thread_started:
-            print("[gesture] GestureDetector already running, skip start.")
+            print("[gesture] Already running.")
             return
 
         if ASYNC_LOOP is None:
-            print("[gesture] ERROR: ASYNC_LOOP is None, cannot start detector yet.")
+            print("[gesture] Cannot start — event loop missing.")
             return
 
-        def gesture_callback(event: GestureEvent):
-            # Called from detector thread
-            if ASYNC_LOOP is None:
-                print("[gesture-callback] No ASYNC_LOOP, dropping event.")
-                return
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    handle_gesture_event(event), ASYNC_LOOP
-                )
-            except Exception as e:
-                print(f"[gesture-callback] Error scheduling coroutine: {e}")
+        def cb(event: GestureEvent):
+            asyncio.run_coroutine_threadsafe(handle_gesture_event(event), ASYNC_LOOP)
 
-        print("[gesture] Starting GestureDetector thread...")
-        gesture_detector = GestureDetector(gesture_callback)
-        t = threading.Thread(target=gesture_detector.run, daemon=True)
-        t.start()
+        gesture_detector = GestureDetector(cb)
+        threading.Thread(target=gesture_detector.run, daemon=True).start()
         gesture_thread_started = True
-        print("[gesture] GestureDetector thread started.")
+        print("[gesture] Detector started.")
 
 
 @app.on_event("startup")
 async def startup_event():
     global ASYNC_LOOP
     ASYNC_LOOP = asyncio.get_running_loop()
-    print("[startup] Async loop captured.")
-
-    if platform.system() == "Darwin":
-        request_camera_permission()
-
-    # Start the global gesture detector once at startup
     start_gesture_detector()
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
-
-    # WS receive loop – we don't care about client messages yet,
-    # but this keeps the connection alive and lets us hook into future commands.
     try:
         while True:
-            msg = await websocket.receive_text()
-            print(f"[ws] Received from client: {msg!r}")
-            # In the future, you can handle explicit client commands here.
+            await websocket.receive_text()
     except WebSocketDisconnect:
-        ws_manager.disconnect(websocket)
-    except Exception as e:
-        print(f"[ws] Error in websocket loop: {e}")
         ws_manager.disconnect(websocket)
 
 
 @app.get("/api/state")
 async def get_state():
-    """Simple debug endpoint so frontend can poll /api/state without 404."""
-    state = deck_manager.get_state()
-    print("[api/state] State requested.")
-    return state
+    return deck_manager.get_state()
 
 
 def main():
