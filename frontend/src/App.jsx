@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import ChristmasFrame from './components/ChristmasFrame.jsx'
 import Flashcard from './components/Flashcard.jsx'
 import GestureIcons from './components/GestureIcons.jsx'
+import GestureIndicator from './components/GestureIndicator.jsx'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -9,7 +10,6 @@ export default function App() {
   const [state, setState] = useState(null)
   const [lastEvent, setLastEvent] = useState(null)
 
-  // NEW UI state
   const [isRecording, setIsRecording] = useState(false)
   const [recognizedText, setRecognizedText] = useState("")
   const [evaluation, setEvaluation] = useState(null)
@@ -39,7 +39,6 @@ export default function App() {
             break
 
           case "event":
-            // Gesture animations + evaluation
             setLastEvent(message.payload)
 
             if (message.payload.kind === "evaluation") {
@@ -51,21 +50,30 @@ export default function App() {
             break
 
           case "START_RECORDING":
-            console.log("🎤 START_RECORDING")
             setIsRecording(true)
-            setRecognizedText("") // clear
+            setRecognizedText("")
+            
+            // Clear any existing timeout
+            if (recordingTimeoutRef.current) {
+              clearTimeout(recordingTimeoutRef.current)
+            }
+
+            // Auto-hide after 2 seconds
+            recordingTimeoutRef.current = window.setTimeout(() => {
+              setIsRecording(false)
+              recordingTimeoutRef.current = null
+            }, 2000)
+
             break
 
           case "STOP_RECORDING":
-            console.log("🛑 STOP_RECORDING", message.text)
-            setIsRecording(false)
+            // We only use this for text, NOT UI visibility
             setRecognizedText(message.text)
             break
 
           default:
             console.log("Unknown WS message:", message)
         }
-
       } catch (err) {
         console.error('Error parsing WebSocket message', err)
       }
@@ -73,9 +81,7 @@ export default function App() {
 
     ws.onerror = (err) => console.error('WebSocket error', err)
 
-    return () => {
-      ws.close()
-    }
+    return () => ws.close()
   }, [])
 
   return (
@@ -92,21 +98,18 @@ export default function App() {
             Recording begins automatically when your hand is raised.
           </p>
 
-          {/* Recording Indicator */}
           {isRecording && (
             <div className="text-red-400 font-bold text-xl animate-pulse">
               🔴 Listening...
             </div>
           )}
 
-          {/* Display recognized speech */}
           {recognizedText && (
             <div className="text-green-300 text-lg">
               <strong>You said:</strong> {recognizedText}
             </div>
           )}
 
-          {/* Evaluation result */}
           {evaluation && (
             <div className={`text-lg font-semibold ${
               evaluation.correct ? "text-green-400" : "text-red-400"
@@ -121,6 +124,9 @@ export default function App() {
           <GestureIcons />
         </div>
       </ChristmasFrame>
+
+      {/* Gesture feedback overlay */}
+      <GestureIndicator lastEvent={lastEvent} />
     </div>
   )
 }
