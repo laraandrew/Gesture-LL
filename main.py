@@ -184,7 +184,9 @@ async def handle_gesture_event(event: GestureEvent):
 
         await ws_manager.broadcast({"type": "START_RECORDING"})
 
-        spoken = stt_engine.transcribe()
+        loop = asyncio.get_running_loop()
+        spoken = await loop.run_in_executor(None, stt_engine.transcribe)
+
 
         await ws_manager.broadcast({
             "type": "STOP_RECORDING",

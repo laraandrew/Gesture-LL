@@ -53,18 +53,12 @@ export default function App() {
             setIsRecording(true)
             setRecognizedText("")
             
-            // Clear any existing timeout
-            if (recordingTimeoutRef.current) {
-              clearTimeout(recordingTimeoutRef.current)
-            }
-
-            // Auto-hide after 2 seconds
-            recordingTimeoutRef.current = window.setTimeout(() => {
+            setTimeout(() => {
               setIsRecording(false)
-              recordingTimeoutRef.current = null
-            }, 2000)
+            }, 1000)
 
             break
+
 
           case "STOP_RECORDING":
             // We only use this for text, NOT UI visibility
