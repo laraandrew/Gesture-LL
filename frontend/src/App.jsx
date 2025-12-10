@@ -98,12 +98,6 @@ export default function App() {
             Recording begins automatically when your hand is raised.
           </p>
 
-          {isRecording && (
-            <div className="text-red-400 font-bold text-xl animate-pulse">
-              🔴 Listening...
-            </div>
-          )}
-
           {recognizedText && (
             <div className="text-green-300 text-lg">
               <strong>You said:</strong> {recognizedText}
