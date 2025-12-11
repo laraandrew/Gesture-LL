@@ -1,3 +1,10 @@
+## Images
+
+<img width="683" height="730" alt="Screenshot 2025-12-09 at 6 56 59 PM" src="https://github.com/user-attachments/assets/b9b156d3-51ed-47c7-bdb2-88bcab8e7cd1" />
+<img width="663" height="734" alt="Screenshot 2025-12-09 at 6 57 48 PM" src="https://github.com/user-attachments/assets/4577ce8e-7f8c-463b-a5e7-447b0a611484" />
+<img width="643" height="757" alt="Screenshot 2025-12-09 at 6 58 44 PM" src="https://github.com/user-attachments/assets/ba6ef012-2fad-4a82-ad56-f60ed71eb137" />
+
+
 # Gesture-LL
 
 Gesture-LL is a gesture-driven, speech-aware language-learning prototype built to explore how computer vision and voice can shape a responsive study loop. The project pairs real-time hand tracking with speech-to-text to keep the interface lightweight while still feeling alive.
